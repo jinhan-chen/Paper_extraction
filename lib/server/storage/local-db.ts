@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { DatabaseSchema, type Database } from "@/lib/types";
 
@@ -17,6 +17,15 @@ function buildEmptyDatabase(): Database {
 
 function parseDatabase(raw: string) {
   return DatabaseSchema.parse(JSON.parse(raw));
+}
+
+function isWindowsRenameError(error: unknown) {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code !== undefined &&
+    ["EPERM", "EACCES", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")
+  );
 }
 
 async function ensureDbFile() {
@@ -63,7 +72,21 @@ export async function mutateDatabase<T>(mutator: (database: Database) => Promise
     // This prevents readers from seeing half-written JSON during async processing.
     await writeFile(DB_TEMP_PATH, serialized);
     await writeFile(DB_BACKUP_PATH, serialized);
-    await rename(DB_TEMP_PATH, DB_FILE_PATH);
+
+    try {
+      await rename(DB_TEMP_PATH, DB_FILE_PATH);
+    } catch (error) {
+      if (!isWindowsRenameError(error)) {
+        throw error;
+      }
+
+      // On Windows, antivirus, file indexing, or sync tools can temporarily
+      // lock the target file and make rename() fail with EPERM/EACCES/EBUSY.
+      // Fall back to a direct overwrite so local dev can continue working.
+      await writeFile(DB_FILE_PATH, serialized);
+      await unlink(DB_TEMP_PATH).catch(() => undefined);
+    }
+
     return result;
   });
 
