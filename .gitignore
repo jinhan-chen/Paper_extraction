@@ -5,3 +5,4 @@ coverage
 data/papers.json
 data/uploads/*
 !data/uploads/.gitkeep
+*.backup.json
